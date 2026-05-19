@@ -16,8 +16,10 @@ from pydantic import Field
 
 from edit_figure.background_remover import remove_icon_backgrounds
 from edit_figure.drawio_placeholder_replacer import replace_drawio_placeholders
+from edit_figure.drawio_png_exporter import export_drawio_to_png
 from edit_figure.icon_cropper import crop_icons
 from edit_figure.sam3_segmenter import segment_with_sam3
+from edit_figure.svg_png_exporter import export_svg_to_png
 from edit_figure.svg_placeholder_replacer import replace_svg_placeholders
 
 
@@ -177,11 +179,9 @@ def _segment_and_extract_icons_sync(
     icons_dir.mkdir(parents=True, exist_ok=True)
     icons_nobg_dir.mkdir(parents=True, exist_ok=True)
 
-    logs = {}
-
     final_sam3_prompt = f"{sam3_prompt}, icon" if sam3_prompt.strip() else "icon"
 
-    sam3_result, logs["sam3"] = _call_with_logs(
+    sam3_result, _ = _call_with_logs(
         segment_with_sam3,
         image_path=input_image_path,
         output_dir=output_dir,
@@ -190,14 +190,14 @@ def _segment_and_extract_icons_sync(
     samed_path = Path(sam3_result["samed_path"])
     boxlib_path = Path(sam3_result["boxlib_path"])
 
-    crop_result, logs["crop_icons"] = _call_with_logs(
+    crop_result, _ = _call_with_logs(
         crop_icons,
         image_path=input_image_path,
         boxlib_path=boxlib_path,
         output_dir=icons_dir,
     )
 
-    rmbg_result, logs["remove_background"] = _call_with_logs(
+    rmbg_result, _ = _call_with_logs(
         remove_icon_backgrounds,
         model_dir=_get_rmbg_model_dir(),
         icons_dir=icons_dir,
@@ -219,7 +219,6 @@ def _segment_and_extract_icons_sync(
             "crop_icons": {"count": crop_result.get("count")},
             "remove_background": {"count": rmbg_result.get("count")},
         },
-        "logs": logs,
     }
 
 
@@ -260,7 +259,7 @@ def _replace_template_placeholders_sync(
             "output_svg": output_path,
         }
 
-    replace_result, logs = _call_with_logs(replace_func, **kwargs)
+    replace_result, _ = _call_with_logs(replace_func, **kwargs)
     if not output_path.is_file():
         raise FileNotFoundError(f"Replace step did not create final file: {output_path}")
 
@@ -271,7 +270,34 @@ def _replace_template_placeholders_sync(
         "template_path": _to_workspace_relative(template_file, workspace_path),
         "icon_infos_json": _to_workspace_relative(icon_infos_path, workspace_path),
         "replace_result": replace_result,
-        "logs": logs,
+    }
+
+
+def _export_diagram_png_sync(
+    workspace_dir: str,
+    source_path: str,
+) -> dict:
+    workspace_path = _resolve_workspace(workspace_dir)
+    source_file = _resolve_relative_path(
+        workspace_path,
+        source_path,
+        param_name="source_path",
+        must_exist=True,
+        must_be_file=True,
+    )
+
+    suffix = source_file.suffix.lower()
+    output_path = source_file.with_suffix(".png")
+    if suffix == ".drawio":
+        export_drawio_to_png(source_file, output_path, verbose=False)
+    elif suffix == ".svg":
+        export_svg_to_png(source_file, output_path, verbose=False)
+    else:
+        raise ValueError("source_path must point to a .drawio or .svg file")
+
+    return {
+        "result": "success",
+        "png_path": _to_workspace_relative(output_path, workspace_path),
     }
 
 
@@ -363,6 +389,42 @@ async def replace_template_placeholders(
             template_path,
             output_format,
             icon_infos_relative_path,
+        )
+    except Exception as exc:
+        return {
+            "result": "error",
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+
+@mcp.tool()
+async def export_diagram_png(
+    workspace_dir: Annotated[
+        str,
+        Field(
+            description=(
+                "Absolute path to the current workspace. "
+                "Windows example: D:/mcp_workspace. "
+                "Linux/macOS example: /home/user/mcp_workspace."
+            )
+        ),
+    ],
+    source_path: Annotated[
+        str,
+        Field(
+            description=(
+                "Diagram .drawio or .svg path relative to workspace_dir, such as output/template.drawio."
+            )
+        ),
+    ],
+) -> dict:
+    """Export a .drawio or .svg diagram to PNG via the configured renderer."""
+    try:
+        return await asyncio.to_thread(
+            _export_diagram_png_sync,
+            workspace_dir,
+            source_path,
         )
     except Exception as exc:
         return {
