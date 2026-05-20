@@ -8,6 +8,7 @@ Outputs:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -22,6 +23,8 @@ OUTPUT_DIR = "outputs/example/icons_nobg"
 ICON_INFOS_JSON = f"{OUTPUT_DIR}/icon_infos.json"
 TARGET_SIZE = (512, 512)
 BATCH_SIZE = 8
+#是否强制gpu
+FORCE_GPU = True
 
 
 def letterbox_image(
@@ -58,6 +61,25 @@ def _label_clean(label: str, fallback_id: int) -> str:
     if label:
         return label.replace("<", "").replace(">", "")
     return f"AF{fallback_id + 1:02d}"
+
+
+def get_rmbg_device() -> str:
+    import torch
+
+    requested_device = os.environ.get("RMBG_DEVICE", "").strip().lower()
+    if requested_device in {"cpu", "cuda"}:
+        if requested_device == "cuda" and not torch.cuda.is_available():
+            print("RMBG_DEVICE=cuda requested, but CUDA is unavailable; falling back to CPU.")
+            return "cpu"
+        return requested_device
+
+    if FORCE_GPU:
+        if torch.cuda.is_available():
+            return "cuda"
+        print("FORCE_GPU is enabled, but CUDA is unavailable; falling back to CPU.")
+        return "cpu"
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def remove_icon_backgrounds(
@@ -100,6 +122,8 @@ def remove_icon_backgrounds(
     with boxlib_path.open("r", encoding="utf-8") as f:
         boxlib = json.load(f)
 
+    device = get_rmbg_device()
+
     boxes = boxlib.get("boxes", [])
     if not boxes:
         print("No boxes found in boxlib.json; nothing to process.")
@@ -109,6 +133,7 @@ def remove_icon_backgrounds(
             "icon_infos_json": str(icon_infos_json),
             "icons": [],
             "count": 0,
+            "device": device,
         }
 
     icon_entries: List[dict] = []
@@ -136,13 +161,14 @@ def remove_icon_backgrounds(
             "icon_infos_json": str(icon_infos_json),
             "icons": [],
             "count": 0,
+            "device": device,
         }
 
-    import torch
     from torchvision import transforms
     from transformers import AutoModelForImageSegmentation
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    import torch
+
     print(f"Device: {device}")
     print(f"Model: {model_dir}")
     print(f"Icons: {len(icon_entries)}")
@@ -150,7 +176,15 @@ def remove_icon_backgrounds(
     model = AutoModelForImageSegmentation.from_pretrained(
         str(model_dir),
         trust_remote_code=True,
-    ).eval().to(device)
+    ).eval()
+    try:
+        model = model.to(device)
+    except RuntimeError as exc:
+        if device != "cuda":
+            raise
+        print(f"CUDA initialization failed ({exc}); falling back to CPU.")
+        device = "cpu"
+        model = model.to(device)
 
     transform_image = transforms.Compose([
         transforms.ToTensor(),
@@ -234,6 +268,7 @@ def remove_icon_backgrounds(
         "icon_infos_json": str(icon_infos_json),
         "icons": icon_infos,
         "count": len(icon_infos),
+        "device": device,
     }
 
 

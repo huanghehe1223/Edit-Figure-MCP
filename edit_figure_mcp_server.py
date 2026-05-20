@@ -214,6 +214,7 @@ def _segment_and_extract_icons_sync(
         "icons_dir": _to_workspace_relative(icons_dir, workspace_path),
         "icons_nobg_dir": _to_workspace_relative(icons_nobg_dir, workspace_path),
         "icon_infos_json": _to_workspace_relative(icon_infos_path, workspace_path),
+        "rmbg_device": rmbg_result.get("device"),
         "step_results": {
             "sam3": {"box_count": sam3_result.get("box_count")},
             "crop_icons": {"count": crop_result.get("count")},
