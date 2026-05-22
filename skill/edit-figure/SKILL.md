@@ -17,17 +17,18 @@ edit-figure/
 |-- agents/
 |   `-- openai.yaml
 `-- prompts/
-    |-- sam3_prompt_generator.md
+    |-- icon_discovery.md
+    |-- sam3_prompt_selector.md
     |-- template_prompt_drawio.md
     `-- template_prompt_svg.md
 ```
 
 - `SKILL.md`: main workflow and routing instructions.
 - `agents/openai.yaml`: UI-facing skill metadata.
-- `prompts/sam3_prompt_generator.md`: guidance for choosing `sam3_prompt`.
+- `prompts/icon_discovery.md`: freely discover visible icon-like or semantic visual elements.
+- `prompts/sam3_prompt_selector.md`: select suitable discovered elements and convert them into the final `sam3_prompt`.
 - `prompts/template_prompt_drawio.md`: guidance for writing `{output_dir}/template.drawio`.
 - `prompts/template_prompt_svg.md`: guidance for writing `{output_dir}/template.svg`.
-
 ## Critical Read Requirement
 
 This skill only works correctly when the model has read the complete relevant files for the current task.
@@ -54,7 +55,8 @@ If the model cannot confirm that `SKILL.md` and all required files for the curre
 
 Read only the prompt needed for the current step, but always read that selected prompt completely through its EOF marker:
 
-- [sam3 prompt generator](./prompts/sam3_prompt_generator.md): plan `sam3_prompt` and call `segment_and_extract_icons`.
+- [icon discovery prompt](./prompts/icon_discovery.md): freely identify visible icon-like, object-like, semantic, or visually meaningful elements in the original image.
+- [SAM3 prompt selector](./prompts/sam3_prompt_selector.md): choose suitable elements from the discovery result and convert them into the final `sam3_prompt`.
 - [draw.io template prompt](./prompts/template_prompt_drawio.md): create `{output_dir}/template.drawio`.
 - [SVG template prompt](./prompts/template_prompt_svg.md): create `{output_dir}/template.svg`.
 
@@ -67,7 +69,8 @@ If the file reader returns a bounded range such as lines 1-50 or lines 51-150, c
 Do not proceed based on a partial read.
 
 Required EOF markers:
-- `prompts/sam3_prompt_generator.md` must end with `<!-- END_OF_FILE: sam3_prompt_generator.md -->`
+- `prompts/icon_discovery.md` must end with `<!-- END_OF_FILE: icon_discovery.md -->`
+- `prompts/sam3_prompt_selector.md` must end with `<!-- END_OF_FILE: sam3_prompt_selector.md -->`
 - `prompts/template_prompt_drawio.md` must end with `<!-- END_OF_FILE: template_prompt_drawio.md -->`
 - `prompts/template_prompt_svg.md` must end with `<!-- END_OF_FILE: template_prompt_svg.md -->`
 
@@ -78,13 +81,17 @@ If an EOF marker is not found, stop and report that the resource file was not fu
 
 1. Determine the target format.
    - If the user explicitly asks for SVG, produce SVG.
-   - If the user asks for both draw.io and SVG, produce both.
    - Otherwise default to draw.io.
 
 2. Plan segmentation.
-   - Read `prompts/sam3_prompt_generator.md`.
+   - Read `prompts/icon_discovery.md` completely.
    - Inspect the original image.
-   - Follow the prompt file's output requirements to choose the exact `sam3_prompt` string.
+   - Follow `prompts/icon_discovery.md` to freely identify visible icon-like, object-like, semantic, or visually meaningful elements.
+   - Respond in chat with the discovery result from `prompts/icon_discovery.md`.
+   - Read `prompts/sam3_prompt_selector.md` completely.
+   - From the previously discovered elements, follow `prompts/sam3_prompt_selector.md` to choose suitable elements for detection.
+   - Convert selected elements into broad, simple English nouns or short noun phrases.
+   - Use the selector prompt's final `Tool argument` as the exact `sam3_prompt` string.
 
 3. Call MCP tool `segment_and_extract_icons`.
    - Required arguments:
@@ -99,23 +106,45 @@ If an EOF marker is not found, stop and report that the resource file was not fu
    - Compare it with the original image and check whether semantic visual objects that should be preserved as images were missed or left unmasked.
    - If the missed objects can be fixed by adding suitable concepts to `sam3_prompt`, call `segment_and_extract_icons` one more time at most.
    - The second call's `sam3_prompt` must be complete: include every prompt from the first call plus the added prompts. Do not pass only the newly added prompts.
-   - Reuse the second call's returned `output_dir`, `samed_image`, `boxlib_json`, and `icon_infos_json` for the rest of the workflow.
+   - Reuse the second call's returned outputs for the rest of the workflow.
    - If the first result is acceptable, or if the misses are editable elements that should be redrawn, do not rerun segmentation.
 
 5. Generate the editable template file in the MCP output directory.
-   - For draw.io, read `prompts/template_prompt_drawio.md`.
+   - For draw.io:
+     - Read `prompts/template_prompt_drawio.md` completely before writing the template.
+     - Strictly follow all requirements, constraints, formatting rules, placeholder rules, output rules, and validation instructions in `prompts/template_prompt_drawio.md`.
      - Write directly to `{output_dir}/template.drawio`.
      - Set `template_path` to that relative path.
-   - For SVG, read `prompts/template_prompt_svg.md`.
+   - For SVG:
+     - Read `prompts/template_prompt_svg.md` completely before writing the template.
+     - Strictly follow all requirements, constraints, formatting rules, placeholder rules, output rules, and validation instructions in `prompts/template_prompt_svg.md`.
      - Write directly to `{output_dir}/template.svg`.
      - Set `template_path` to that relative path.
-   - Use the original image, `samed_image`, and `boxlib_json` as inputs.
+   - Treat the selected template prompt file as the authoritative specification for generating the template.
+   - Do not simplify, reinterpret, skip, or partially apply the selected template prompt's instructions.
+   - Use the original image, `samed_image`, and the complete `boxlib_json` as required inputs.
+   - Read and parse the complete `boxlib_json` before writing the template.
    - Preserve the original image coordinate system from `boxlib.json.image_size`.
-   - Create every `<AF>xx` placeholder exactly as instructed by the selected template prompt.
-   - Do not embed the original raster figure or cropped icons in the template.
+   - Create placeholders only as required by the selected template prompt and `boxlib.json`.
+   - Do not embed the original raster figure or cropped icons in the template unless the selected template prompt explicitly allows it.
    - Do not paste the full template code in chat unless the user explicitly asks; create the file in the workspace.
 
-6. Call MCP tool `replace_template_placeholders`.
+6. Preview and optimize the template.
+   - After writing `template.drawio` or `template.svg`, call MCP tool `export_diagram_png` with `workspace_dir` and `source_path` set to `{output_dir}/template.drawio` or `{output_dir}/template.svg`, relative to `workspace_dir`.
+   - Open and inspect the exported template PNG; compare it against both the original input image and `samed_image` (`samed.png`).
+   - Do not assume `.drawio` or `.svg` files can be visually inspected directly; they must be exported to PNG before visual comparison.
+   - Check whether model-drawn editable non-icon elements are correctly positioned relative to the masked/icon placeholder regions in `samed_image`; if misaligned, adjust editable elements first instead of moving/resizing masked/icon placeholder regions.
+   - Only adjust placeholder positions or sizes when the preview clearly shows that the placeholder geometry from `boxlib.json` is wrong or unusable.
+   - Check whether all model-drawn editable non-icon elements are faithfully reconstructed from the original image, including basic shapes, lines/arrows, text, labels, containers, connectors, colors, approximate stroke widths, spacing/alignment, and layering order.
+   - If any non-icon basic element is missing, oversimplified, poorly shaped, poorly aligned, incorrectly layered, or visually inconsistent with the original image, revise and improve the same `template.*` file.
+   - Prefer improving editable vector/text elements over changing icon placeholders.
+   - Preserve every required placeholder ID from `boxlib.json`; do not invent, remove, rename, or duplicate `<AF>xx` placeholders during optimization.
+   - Do not embed the original raster figure or cropped icons during optimization.
+   - After each revision, call `export_diagram_png` again on the revised `template.*`, then open and inspect the new exported PNG before deciding whether another revision is needed.
+   - Run at most 3 template optimization passes; stop early when there are no major visual issues.
+   - Minor unavoidable differences are acceptable if the editable structure is correct and further changes are unlikely to improve the result.
+
+7. Call MCP tool `replace_template_placeholders`.
    - Required arguments:
      - `workspace_dir`: same absolute workspace path.
      - `template_path`: `{output_dir}/template.drawio` or `{output_dir}/template.svg`, relative to `workspace_dir`.
@@ -126,7 +155,7 @@ If an EOF marker is not found, stop and report that the resource file was not fu
 ## Output Discipline
 
 - Return the final relative path from the replacement tool.
-- Mention the generated `template.*` and `final.*` paths.
+- Mention the generated `template.*`, `template preview PNG`, `final.*` paths.
 - If segmentation finds no icons, still generate the editable template and run replacement.
 - If producing both formats, reuse the same segmentation output and run template generation plus replacement once per format.
 
