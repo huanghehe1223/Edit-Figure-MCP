@@ -125,7 +125,7 @@ skill/edit-figure/
 
 ### 示例一：`origin1.jpeg`
 
-<p>
+<p align="center">
   <img src="sample_images/origin1.jpeg" alt="origin1 原始图像" width="720">
 </p>
 
@@ -136,7 +136,7 @@ skill/edit-figure/
 
 ### 示例二：`origin2.jpg`
 
-<p>
+<p align="center">
   <img src="sample_images/origin2.jpg" alt="origin2 原始图像" width="720">
 </p>
 
